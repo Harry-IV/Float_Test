@@ -14,7 +14,7 @@
 MS5837 sensor;
 
 struct DepthPacket {
-  float depth;
+  double depth;
   unsigned long Time;
 };
 
@@ -40,17 +40,20 @@ int servopos = 1500;
 
 
 // Pids initialization
-float p = 0.5;
-float i = 0.01;
-float d = 0.1;
-float desired_depth=2.5;
-float prev_error=0;
-float integral=0;
-float derivative=0;
-float error=0;
+double p = 0.5;
+double i = 0.01;
+double d = 0.1;
+double desired_depth=2.5;
+double prev_error=0;
+double integral=0;
+double derivative=0;
+double error=0;
 int stage;
-float start_time;
+double start_time;
 bool deployed;
+bool started;
+double control;
+double depth;
 
 
 
@@ -96,6 +99,9 @@ void handleControlRequest() {
   if (webServer.hasArg("command"))
   {
     ctrlCommand = webServer.arg("command");
+    p = webServer.arg("P").toDouble();
+    i = webServer.arg("I").toDouble();
+    d = webServer.arg("D").toDouble();
     Serial.println(ctrlCommand);
 
     if (ctrlCommand == "START") {  
@@ -107,17 +113,17 @@ void handleControlRequest() {
       msg = "EX01 " + String(mySensorData.Time) + " sec " + String(mySensorData.depth) + " m ";
     }
     else if (ctrlCommand == "UP") {
-      digitalWrite(MOTOR_IN2, LOW);
-      digitalWrite(MOTOR_IN1, HIGH);
-      delay(2000);
+      digitalWrite(MOTOR_IN2, HIGH);
       digitalWrite(MOTOR_IN1, LOW);
+      delay(5000);
+      digitalWrite(MOTOR_IN2, LOW);
       msg = "Going UP!";
     }
     else if (ctrlCommand == "DOWN") {
-      digitalWrite(MOTOR_IN1, LOW);
-      digitalWrite(MOTOR_IN2, HIGH);
-      delay(2000);
+      digitalWrite(MOTOR_IN1, HIGH);
       digitalWrite(MOTOR_IN2, LOW);
+      delay(5000);
+      digitalWrite(MOTOR_IN1, LOW);
       msg = "Going DOWN!";
     }
     else if (ctrlCommand == "DEPLOYFLAPS"){
@@ -204,50 +210,52 @@ void loop() {
     Serial.println("reading sensor...");
     mySensorData = readData();
     mySensorDataList.add(mySensorData);
+    sensor.read();
+    depth = sensor.depth();
     if (stage == 0){
-      if (mySensorData > 1.5 and deployed == False){
+      if (depth > 1.5 and deployed == false){
         for(int pos = servopos; pos >= 1200; pos-=1){
           myservo.writeMicroseconds(pos);
           delay(1);
         }
-        deployed = True;
+        deployed = true;
         servopos = 1200;
       }
-      error = desired_depth - mySensorData;
-      if (error < 0.1 and started == False){
+      error = desired_depth - depth;
+      if (error < 0.1 and started == false){
         start_time = millis();
-        started = True;
+        started = true;
       }
-      if (millis()-start_time >= 45){
+      if (millis()-start_time >= 45000){
         stage = 1;
       }
       integral += error;
       derivative = error - prev_error;
       control = p * error + i * integral + d * derivative;
-      control = max(min(control, 1.0), -1);
+      control = max(min(control, 1.0), -1.0);
 
       if (control > derivative){ // going down
-        digitalWrite(MOTOR_IN1, LOW);
-        digitalWrite(MOTOR_IN2, HIGH);
-        delay(2000);
+        digitalWrite(MOTOR_IN1, HIGH);
         digitalWrite(MOTOR_IN2, LOW);
+        delay(2000);
+        digitalWrite(MOTOR_IN1, LOW);
       }
       else{ // going up
-        digitalWrite(MOTOR_IN2, LOW);
-        digitalWrite(MOTOR_IN1, HIGH);
-        delay(2000);
+        digitalWrite(MOTOR_IN2, HIGH);
         digitalWrite(MOTOR_IN1, LOW);
+        delay(2000);
+        digitalWrite(MOTOR_IN2, LOW);
       }
       prev_error = error;
       
     }
     else if (stage == 1){ // GOING BACK UP AFTER 45 SECONDS
-      if (deployed == True){
+      if (deployed == true){
         for(int pos = servopos; pos <= 1800; pos+=1){
           myservo.writeMicroseconds(pos);
           delay(1);
         }
-        deployed = False;
+        deployed = false;
         servopos = 1800;
       }
 
