@@ -36,10 +36,10 @@ String ctrlCommand = "";
 
 Servo myservo; // Servo Initialization/setup
 int servoPin = 32;
-int servopos = 1500;
 
 
 // Pids initialization
+String p_str, i_str, d_str;
 double p = 0.5;
 double i = 0.01;
 double d = 0.1;
@@ -48,12 +48,14 @@ double prev_error=0;
 double integral=0;
 double derivative=0;
 double error=0;
-int stage;
-double start_time;
-bool deployed;
-bool started;
-double control;
-double depth;
+int stage=0;
+double start_time=0;
+bool deployed=false;
+bool started=false;
+double control=0;
+double depth=0;
+double prev_time=0;
+String msg;
 
 
 
@@ -99,47 +101,48 @@ void handleControlRequest() {
   if (webServer.hasArg("command"))
   {
     ctrlCommand = webServer.arg("command");
-    p = webServer.arg("P").toDouble();
-    i = webServer.arg("I").toDouble();
-    d = webServer.arg("D").toDouble();
     Serial.println(ctrlCommand);
 
-    if (ctrlCommand == "START") {  
+    int ind1 = ctrlCommand.indexOf(':');
+    int ind2 = ctrlCommand.indexOf(':', ind1+1);
+    int ind3 = ctrlCommand.indexOf(':', ind2+1);
+    p_str = ctrlCommand.substring(ind1+1, ind2-2);
+    i_str = ctrlCommand.substring(ind2+1, ind3-2);
+    d_str = ctrlCommand.substring(ind3+1);
+    p = p_str.toDouble();
+    i = i_str.toDouble();
+    d = d_str.toDouble();
+
+    if (ctrlCommand.startsWith("START") || ctrlCommand.startsWith("STARTNOPIDS")) {  
       lastResetTime = millis();
       mySensorDataList.clear();
       msg = "Received START command. Starting ...";
+
+      prev_time = millis();
     }
-    else if (ctrlCommand == "STATUS") {      
-      msg = "EX01 " + String(mySensorData.Time) + " sec " + String(mySensorData.depth) + " m ";
+    else if (ctrlCommand.startsWith("STATUS")) {
+      msg = "EX01 " + String(mySensorData.Time) + " sec " + String(mySensorData.depth) + " m " + " p: " + String(p) + " i: " + String(i) + " d: " + String(d);
     }
-    else if (ctrlCommand == "UP") {
+    else if (ctrlCommand.startsWith("UP")) {
       digitalWrite(MOTOR_IN2, HIGH);
       digitalWrite(MOTOR_IN1, LOW);
       delay(5000);
       digitalWrite(MOTOR_IN2, LOW);
       msg = "Going UP!";
     }
-    else if (ctrlCommand == "DOWN") {
+    else if (ctrlCommand.startsWith("DOWN")) {
       digitalWrite(MOTOR_IN1, HIGH);
       digitalWrite(MOTOR_IN2, LOW);
       delay(5000);
       digitalWrite(MOTOR_IN1, LOW);
       msg = "Going DOWN!";
     }
-    else if (ctrlCommand == "DEPLOYFLAPS"){
-      for(int pos = servopos; pos >= 1200; pos-=1){
-        myservo.writeMicroseconds(pos);
-        delay(1);
-      }
-      servopos = 1200;
+    else if (ctrlCommand.startsWith("DEPLOYFLAPS")){
+      myservo.write(59);
       msg = "Deploying Flaps!";
     }
-    else if (ctrlCommand == "RETRACTFLAPS"){
-      for(int pos = servopos; pos <= 1800; pos+=1){
-        myservo.writeMicroseconds(pos);
-        delay(1);
-      }
-      servopos = 1800;
+    else if (ctrlCommand.startsWith("RETRACTFLAPS")){
+      myservo.write(90);
       msg = "Retracting Flaps";
     }
     else {
@@ -206,20 +209,19 @@ void setup() {
 void loop() {
   //before deployment
   
-  if (ctrlCommand == "START" && millis() <= (lastResetTime + RESETTIME)) {
+  if (ctrlCommand.startsWith("START")) {
     Serial.println("reading sensor...");
     mySensorData = readData();
     mySensorDataList.add(mySensorData);
     sensor.read();
     depth = sensor.depth();
+    msg = "EX01 " + String(mySensorData.Time) + " sec " + String(depth) + " m ";
+    webServer.send(200, "text/plain", msg);
+    myservo.write(90);
     if (stage == 0){
       if (depth > 1.5 and deployed == false){
-        for(int pos = servopos; pos >= 1200; pos-=1){
-          myservo.writeMicroseconds(pos);
-          delay(1);
-        }
+        //myservo.write(59);
         deployed = true;
-        servopos = 1200;
       }
       error = desired_depth - depth;
       if (error < 0.1 and started == false){
@@ -230,20 +232,74 @@ void loop() {
         stage = 1;
       }
       integral += error;
-      derivative = error - prev_error;
+      derivative = (error - prev_error)/(millis()-prev_time);
+      Serial.println(derivative);
       control = p * error + i * integral + d * derivative;
       control = max(min(control, 1.0), -1.0);
+
+      prev_error = error;
+      prev_time = millis();
 
       if (control > derivative){ // going down
         digitalWrite(MOTOR_IN1, HIGH);
         digitalWrite(MOTOR_IN2, LOW);
-        delay(2000);
+        delay(300);
         digitalWrite(MOTOR_IN1, LOW);
       }
       else{ // going up
         digitalWrite(MOTOR_IN2, HIGH);
         digitalWrite(MOTOR_IN1, LOW);
-        delay(2000);
+        delay(300);
+        digitalWrite(MOTOR_IN2, LOW);
+      }
+      
+    }
+    else if (stage == 1){ // GOING BACK UP AFTER 45 SECONDS
+      if (deployed == true){
+        //myservo.write(90);
+      }
+
+      digitalWrite(MOTOR_IN2, LOW);
+      digitalWrite(MOTOR_IN1, HIGH);
+      delay(300);
+      digitalWrite(MOTOR_IN1, LOW);
+      
+
+    }
+  }
+  else if (ctrlCommand.startsWith("STARTNOPIDS") && millis() <= (lastResetTime + RESETTIME)) {
+    Serial.println("reading sensor...");
+    mySensorData = readData();
+    mySensorDataList.add(mySensorData);
+    sensor.read();
+    depth = sensor.depth();
+    msg = "EX01 " + String(mySensorData.Time) + " sec " + String(depth) + " m ";
+    webServer.send(200, "text/plain", msg);
+    myservo.write(90);
+    if (stage == 0){
+      if (depth > 1.5 and deployed == false){
+        //myservo.write(59);
+        deployed = true;
+      }
+      error = desired_depth - depth;
+      if (error < 0.1 and started == false){
+        start_time = millis();
+        started = true;
+      }
+      if (millis()-start_time >= 45000){
+        stage = 1;
+      }
+
+      if (depth < 2.5){ // going down
+        digitalWrite(MOTOR_IN1, HIGH);
+        digitalWrite(MOTOR_IN2, LOW);
+        delay(300);
+        digitalWrite(MOTOR_IN1, LOW);
+      }
+      else{ // going up
+        digitalWrite(MOTOR_IN2, HIGH);
+        digitalWrite(MOTOR_IN1, LOW);
+        delay(300);
         digitalWrite(MOTOR_IN2, LOW);
       }
       prev_error = error;
@@ -251,19 +307,15 @@ void loop() {
     }
     else if (stage == 1){ // GOING BACK UP AFTER 45 SECONDS
       if (deployed == true){
-        for(int pos = servopos; pos <= 1800; pos+=1){
-          myservo.writeMicroseconds(pos);
-          delay(1);
-        }
+        //myservo.write(90);
         deployed = false;
-        servopos = 1800;
       }
 
       digitalWrite(MOTOR_IN2, LOW);
       digitalWrite(MOTOR_IN1, HIGH);
-      delay(2000);
+      delay(300);
       digitalWrite(MOTOR_IN1, LOW);
-
+      
     }
   }
   else {
@@ -274,6 +326,5 @@ void loop() {
 
   // Handle Client Requests
   webServer.handleClient();
-  delay(2000);
 }
 
